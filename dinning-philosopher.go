@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
-
-	"golang.org/x/exp/rand"
 )
 
 type Fork struct {
@@ -110,6 +109,8 @@ func (p *Philosopher) Dine() {
 
 		p.Eat()
 
+		// Make sure to release the forks after eating so other
+		// philosophers can use them again avoiding deadlocks
 		p.rightFork.Release()
 		p.leftFork.Release()
 		break
@@ -122,7 +123,7 @@ func (p *Philosopher) Think() {
 }
 
 func (p *Philosopher) Eat() {
-	fmt.Println("Philosopher", p.id, "is eating")
+	fmt.Println("Philosopher", p.id, "is eating his", p.meals+1, "meal")
 	time.Sleep(time.Millisecond * time.Duration(rand.Intn(500)+200))
 	p.meals++
 }
