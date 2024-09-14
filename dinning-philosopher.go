@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
+
+	"golang.org/x/exp/rand"
 )
 
 type Fork struct {
@@ -67,7 +70,7 @@ func (f Fork) Serve() {
 	}
 }
 
-func (f Fork) Grap() bool {
+func (f Fork) TryGrap() bool {
 	select {
 	case f.request <- true:
 		return <-f.request
@@ -91,13 +94,16 @@ func (p *Philosopher) Dine() {
 	for {
 		p.Think()
 
-		hasRightFork := p.rightFork.Grap()
+		hasRightFork := p.rightFork.TryGrap()
 		if !hasRightFork {
 			continue
 		}
 
-		hasLeftFork := p.leftFork.Grap()
+		hasLeftFork := p.leftFork.TryGrap()
 		if !hasLeftFork {
+			// Here we make sure the program doesn't get stuck in a deadlock
+			// since we drop the right fork if we can't get the left one
+			// making it available for other philosophers to pick up.
 			p.rightFork.Release()
 			continue
 		}
@@ -112,11 +118,11 @@ func (p *Philosopher) Dine() {
 
 func (p *Philosopher) Think() {
 	fmt.Println("Philosopher", p.id, "is thinking")
-	// time.Sleep(time.Millisecond * time.Duration(rand.Intn(500)+200))
+	time.Sleep(time.Millisecond * time.Duration(rand.Intn(500)+200))
 }
 
 func (p *Philosopher) Eat() {
 	fmt.Println("Philosopher", p.id, "is eating")
-	// time.Sleep(time.Millisecond * time.Duration(rand.Intn(500)+200))
+	time.Sleep(time.Millisecond * time.Duration(rand.Intn(500)+200))
 	p.meals++
 }
