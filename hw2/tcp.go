@@ -2,81 +2,229 @@ package main
 
 import (
 	"fmt"
-	"net"
+	"strings"
 	"time"
 )
 
+var (
+	server = NewConnection("SERVER")
+	client = NewConnection("CLIENT")
+)
+
 func main() {
-	go server()
-	time.Sleep(5 * time.Second)
-	client()
+	fmt.Println("Starting TCP connection simulation...")
+	go serverListen()
+	time.Sleep(time.Second)
+	clientListen()
 }
 
-func server() {
-	listener, err := net.Listen("tcp", ":8080")
-	if err != nil {
-		panic(err)
-	}
-	defer listener.Close()
+func serverListen() {
+	server.Accept(*client)
 
-	conn, err := listener.Accept()
-	if err != nil {
-		panic(err)
+	for {
+		packet := server.Receive()
+		fmt.Println("Received: ", string(packet.Data))
 	}
-	defer conn.Close()
-
-	buffer := make([]byte, 1024)
-
-	n, err := conn.Read(buffer)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Server received: %s\n", buffer[:n])
-
-	_, err = conn.Write([]byte("SYN-ACK"))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Server sent: SYN-ACK")
-
-	n, err = conn.Read(buffer)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Server received: %s\n", buffer[:n])
 }
 
-func client() {
-	conn, err := net.Dial("tcp", "localhost:8080")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
+func clientListen() {
+	client.Connect(*server)
+	client.Send([]byte("Hello, World!"))
+	client.Close()
+}
 
-	_, err = conn.Write([]byte("SYN"))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Client sent: SYN")
+type Flags struct {
+	ACK bool
+	SYN bool
+	RST bool
+	FIN bool
+}
 
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		panic(err)
+type Packet struct {
+	Source string
+	Dest   string
+	Seq    uint32
+	Ack    uint32
+	Flags  Flags
+	Data   []byte
+}
+
+type Connection struct {
+	Name    string
+	Target  chan Packet
+	Conn    chan Packet
+	Packets []Packet
+}
+
+func (f *Flags) String() string {
+	flags := make([]string, 0)
+
+	if f.ACK {
+		flags = append(flags, "ACK")
+	}
+	if f.SYN {
+		flags = append(flags, "SYN")
+	}
+	if f.RST {
+		flags = append(flags, "RST")
+	}
+	if f.FIN {
+		flags = append(flags, "FIN")
 	}
 
-	fmt.Printf("Client received: %s\n", buffer[:n])
+	return strings.Join(flags, ", ")
+}
 
-	_, err = conn.Write([]byte("ACK"))
-	if err != nil {
-		panic(err)
+func NewConnection(name string) *Connection {
+	return &Connection{
+		Name:    name,
+		Target:  make(chan Packet, 1),
+		Conn:    make(chan Packet, 1),
+		Packets: make([]Packet, 0),
 	}
-	fmt.Println("Client sent: ACK")
+}
 
-	message := "Hello, World!"
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		panic(err)
+func (c *Connection) send(packet Packet) {
+	// This is to simulate network delay
+	time.Sleep(time.Second)
+
+	fmt.Printf(
+		"%s --> %s [%s] Seq=%d Ack=%d Len=%d\n",
+		packet.Source,
+		packet.Dest,
+		packet.Flags.String(),
+		packet.Seq,
+		packet.Ack,
+		len(packet.Data),
+	)
+	c.Target <- packet
+}
+
+func (c *Connection) receive() Packet {
+	packet := <-c.Conn
+
+	// This is to simulate network delay
+	time.Sleep(time.Second)
+
+	fmt.Printf(
+		"%s <-- %s [%s] Seq=%d Ack=%d Len=%d\n",
+		packet.Dest,
+		packet.Source,
+		packet.Flags.String(),
+		packet.Seq,
+		packet.Ack,
+		len(packet.Data),
+	)
+	c.Packets = append(c.Packets, packet)
+	return packet
+}
+
+func (c *Connection) Accept(conn Connection) Packet {
+	packet := c.receive()
+	if !packet.Flags.SYN {
+		c.Reset()
 	}
-	fmt.Println("Client sent:", message)
+
+	c.Target = conn.Conn
+	c.send(Packet{
+		Source: c.Name,
+		Dest:   conn.Name,
+		Seq:    packet.Seq + 1,
+		Ack:    packet.Seq,
+		Flags: Flags{
+			SYN: true,
+			ACK: true,
+		},
+	})
+
+	packet = c.receive()
+	if !packet.Flags.ACK {
+		c.Reset()
+	}
+
+	return c.receive()
+}
+
+func (c *Connection) Connect(conn Connection) {
+	c.Target = conn.Conn
+	c.send(Packet{
+		Source: c.Name,
+		Dest:   conn.Name,
+		Seq:    0,
+		Ack:    0,
+		Flags: Flags{
+			SYN: true,
+		},
+	})
+
+	packet := c.receive()
+	if !packet.Flags.SYN && !packet.Flags.ACK {
+		c.Reset()
+	}
+
+	c.send(Packet{
+		Source: c.Name,
+		Dest:   conn.Name,
+		Seq:    packet.Seq + 1,
+		Ack:    packet.Seq,
+		Flags: Flags{
+			ACK: true,
+		},
+	})
+}
+
+func (c *Connection) Receive() Packet {
+	packet := c.receive()
+
+	if packet.Flags.RST {
+		c.Reset()
+	}
+	if packet.Flags.FIN {
+		c.Close()
+	}
+
+	return packet
+}
+
+func (c *Connection) Close() {
+	lastPacket := c.Packets[len(c.Packets)-1]
+
+	c.send(Packet{
+		Source: lastPacket.Source,
+		Dest:   lastPacket.Dest,
+		Seq:    lastPacket.Seq + 1,
+		Ack:    lastPacket.Seq,
+		Flags: Flags{
+			FIN: true,
+			ACK: true,
+		},
+	})
+}
+
+func (c *Connection) Reset() {
+	lastPacket := c.Packets[len(c.Packets)-1]
+
+	c.send(Packet{
+		Seq: lastPacket.Seq + 1,
+		Ack: lastPacket.Seq,
+		Flags: Flags{
+			RST: true,
+			ACK: true,
+		},
+	})
+}
+
+func (c *Connection) Send(bytes []byte) {
+	lastPacket := c.Packets[len(c.Packets)-1]
+
+	c.send(Packet{
+		Source: lastPacket.Source,
+		Dest:   lastPacket.Dest,
+		Seq:    lastPacket.Seq + 1,
+		Ack:    lastPacket.Seq,
+		Flags: Flags{
+			ACK: true,
+		},
+		Data: bytes,
+	})
 }
